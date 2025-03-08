@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FER Analysis</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 0.5rem;
+            max-width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .small-image{
+            max-height: 80px;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold mb-8 text-center">FER Analysis</h1>
+
+        <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-center">Select an Image</h2>
+            <div class="flex items-center justify-center space-x-4">
+                <input type="file" id="imageInput" accept="image/*" class="hidden">
+                <button onclick="document.getElementById('imageInput').click()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Choose File
+                </button>
+                <button id="archiveButton" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                    Archive
+                </button>
+            </div>
+        </div>
+
+        <!-- Archive Section -->
+        <div id="archiveSection" class="hidden bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-xl font-semibold mb-4">Archive</h2>
+            <button id="backToMain" class="mb-4 bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">
+                Back to Main
+            </button>
+            <div id="archiveContainer" class="grid grid-cols-1 gap-4">
+                <!-- Archive items will be inserted here -->
+            </div>
+        </div>
+
+        <!-- Loading Modal -->
+        <div id="loadingModal" class="modal-overlay hidden">
+            <div class="modal-content text-center">
+                <div class="flex justify-center items-center mb-4">
+                    <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                </div>
+                <p>Processing image...</p>
+            </div>
+        </div>
+
+        <!-- Edit Modal -->
+        <div id="editModal" class="modal-overlay hidden">
+            <div class="modal-content w-96">
+                <h3 class="text-xl font-semibold mb-4">Edit Emotions - Face <span id="editingFaceId"></span></h3>
+                <div id="emotionInputs"></div>
+                <div id="totalEmotions" class="mt-2 text-sm font-semibold text-red-500"></div>
+                <div class="mt-4 flex justify-center space-x-4">
+                    <button onclick="saveEmotions()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Save</button>
+                    <button onclick="closeEditModal()" class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Faces Section -->
+        <div id="facesSection" class="hidden bg-white p-6 rounded-lg shadow-md mb-8">
+            <h2 class="text-xl font-semibold mb-4">Detected Faces</h2>
+            <div id="facesContainer" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+            <div class="mt-6 flex justify-center">
+                <button onclick="analyzeFaces()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                    Analyze Selected Faces
+                </button>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="resultsSection" class="hidden bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-4">Analysis Results</h2>
+            <div id="resultsContainer"></div>
+            <div id="finalImageContainer" class="mt-6"></div>
+            <div class="mt-6 flex justify-center">
+                <button onclick="submitToDatabase()" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                    Submit to Database
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentImagePath = '';
+        let detectedFaces = [];
+        let selectedFaces = new Set();
+        let analysisResults = null;
+        let currentEditingFace = null;
+
+        // Event Listeners
+        document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+        document.getElementById('archiveButton').addEventListener('click', showArchive);
+        document.getElementById('backToMain').addEventListener('click', hideArchive);
+
+        function showArchive() {
+            document.querySelectorAll('.max-w-4xl > div').forEach(div => {
+                if (div.id !== 'archiveSection' && !div.classList.contains('modal-overlay')) {
+                    div.classList.add('hidden');
+                }
+            });
+            document.getElementById('archiveSection').classList.remove('hidden');
+            loadArchive();
+        }
+
+        function hideArchive() {
+            document.getElementById('archiveSection').classList.add('hidden');
+            if (currentImagePath) {
+                // Tylko jeśli jest wgrane zdjęcie, pokazujemy odpowiednie sekcje
+                document.querySelectorAll('.max-w-4xl > div').forEach(div => {
+                    if (div.id !== 'archiveSection' && !div.classList.contains('modal-overlay')) {
+                        div.classList.remove('hidden');
+                    }
+                });
+            } else {
+                // Jeśli nie ma wgranego zdjęcia, pokazujemy tylko sekcję wyboru pliku
+                document.querySelector('.bg-white.p-6.rounded-lg.shadow-md.mb-8').classList.remove('hidden');
+                document.getElementById('facesSection').classList.add('hidden');
+                document.getElementById('resultsSection').classList.add('hidden');
+            }
+        }
+
+        async function loadArchive() {
+            const response = await fetch('/get_archive');
+            const data = await response.json();
+
+            if (data.success) {
+                const archiveContainer = document.getElementById('archiveContainer');
+                archiveContainer.innerHTML = '';
+
+                data.archive.forEach(entry => {
+                    const item = document.createElement('div');
+                    item.className = 'p-4 border rounded hover:bg-gray-100 cursor-pointer';
+
+                    const facesCount = Object.keys(entry.faces).length;
+                    item.innerHTML = `
+                        <div vertical-align>
+                            <div class="font-semibold">Image: ${entry.image_path}</div>
+                            <div>Detected faces: ${facesCount}</div>
+                        </div>
+                        <div>
+                            <img class="small-image" src="${entry.image_path}"></img>
+                        </div>
+                    `;
+
+                    item.onclick = () => loadArchiveImage(entry.image_path);
+                    archiveContainer.appendChild(item);
+                });
+            }
+        }
+
+        async function loadArchiveImage(imagePath) {
+            document.getElementById('loadingModal').classList.remove('hidden');
+
+            try {
+                const response = await fetch('/load_archive_image', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ image_path: imagePath })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentImagePath = data.filepath;
+                detectedFaces = data.faces;
+                displayFaces(data.faces);
+                hideArchive();
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while loading the archive image');
+            } finally {
+                document.getElementById('loadingModal').classList.add('hidden');
+            }
+        }
+
+        async function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            document.getElementById('loadingModal').classList.remove('hidden');
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                currentImagePath = data.filepath;
+                detectedFaces = data.faces;
+                displayFaces(data.faces);
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while uploading the image');
+            } finally {
+                document.getElementById('loadingModal').classList.add('hidden');
+            }
+        }
+
+        function displayFaces(faces) {
+            const container = document.getElementById('facesContainer');
+            container.innerHTML = '';
+            selectedFaces.clear();
+
+            faces.forEach(face => {
+                const div = document.createElement('div');
+                div.className = 'border p-4 rounded';
+                div.innerHTML = `
+                    <img src="data:image/jpeg;base64,${face.image}" class="w-full mb-2">
+                    <div class="flex justify-between items-center">
+                        <label class="flex items-center">
+                            <input type="checkbox" class="mr-2" onchange="toggleFace(${face.id})">
+                            Face ${face.id}
+                        </label>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+
+            document.getElementById('facesSection').classList.remove('hidden');
+            document.getElementById('resultsSection').classList.add('hidden');
+        }
+
+        function toggleFace(faceId) {
+            if (selectedFaces.has(faceId)) {
+                selectedFaces.delete(faceId);
+            } else {
+                selectedFaces.add(faceId);
+            }
+        }
+
+        async function analyzeFaces() {
+            if (selectedFaces.size === 0) {
+                alert('Please select at least one face to analyze');
+                return;
+            }
+
+            document.getElementById('loadingModal').classList.remove('hidden');
+
+            const acceptedFaces = detectedFaces.filter(face => selectedFaces.has(face.id));
+
+            try {
+                const response = await fetch('/analyze_faces', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        filepath: currentImagePath,
+                        accepted_faces: acceptedFaces
+                    })
+                });
+
+                const data = await response.json();
+                analysisResults = data;
+                displayResults(data);
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred during analysis');
+            } finally {
+                document.getElementById('loadingModal').classList.add('hidden');
+            }
+        }
+
+        function openEditModal(faceId) {
+            const result = analysisResults.results.find(r => r.face_id === faceId);
+            if (!result) return;
+
+            currentEditingFace = result;
+            document.getElementById('editingFaceId').textContent = faceId;
+
+            const emotionsContainer = document.getElementById('emotionInputs');
+            emotionsContainer.innerHTML = '';
+
+            Object.entries(result.emotions).forEach(([emotion, value]) => {
+                const div = document.createElement('div');
+                div.className = 'mb-3';
+                div.innerHTML = `
+                    <label class="block mb-1 capitalize">${emotion}:</label>
+                    <input type="number"
+                        value="${value.toFixed(1)}"
+                        class="w-full p-2 border rounded"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        onchange="updateEmotionTotal()"
+                        data-emotion="${emotion}">
+                `;
+                emotionsContainer.appendChild(div);
+            });
+
+            updateEmotionTotal();
+            document.getElementById('editModal').classList.remove('hidden');
+        }
+
+        function updateEmotionTotal() {
+    const inputs = document.querySelectorAll('#emotionInputs input');
+    let total = 0;
+
+    // Oblicz obecny sumaryczny procent
+    inputs.forEach(input => {
+        const value = parseFloat(input.value || 0);
+        total += value;
+    });
+
+    // Jeśli przekracza 100%, resetuj ostatnio zmodyfikowane pole
+    if (total > 100) {
+        const lastInput = event.target; // Pole edytowane przez użytkownika
+        const excess = total - 100;
+        const newValue = parseFloat(lastInput.value) - excess;
+
+        // Twarde ograniczenie do maksymalnej wartości
+        lastInput.value = Math.max(0, newValue.toFixed(1));
+        total = 100; // Zresetuj sumę do maksymalnej dopuszczalnej wartości
+    }
+
+    // Wyświetl aktualną sumę w interfejsie
+    const totalElement = document.getElementById('totalEmotions');
+    totalElement.textContent = `Total: ${total.toFixed(1)}%`;
+    totalElement.className = total === 100 ? 
+        'mt-2 text-sm font-semibold text-green-500' : 
+        'mt-2 text-sm font-semibold text-red-500';
+     
+
+}
+        function closeEditModal() {
+            document.getElementById('editModal').classList.add('hidden');
+            currentEditingFace = null;
+        }
+
+        function saveEmotions() {
+            const inputs = document.querySelectorAll('#emotionInputs input');
+            const total = Array.from(inputs).reduce((sum, input) => sum + parseFloat(input.value || 0), 0);
+
+            if (Math.abs(total - 100) > 0.1) {
+                alert('Total emotions must sum to 100%');
+                return;
+            }
+
+            const updatedEmotions = {};
+            inputs.forEach(input => {
+                updatedEmotions[input.dataset.emotion] = parseFloat(input.value);
+            });
+
+            const resultIndex = analysisResults.results.findIndex(r => r.face_id === currentEditingFace.face_id);
+            if (resultIndex !== -1) {
+                analysisResults.results[resultIndex].emotions = updatedEmotions;
+                displayResults(analysisResults);
+            }
+
+            closeEditModal();
+        }
+
+        function displayResults(data) {
+    const container = document.getElementById('resultsContainer');
+    container.innerHTML = '';
+
+    data.results.forEach(result => {
+        const div = document.createElement('div');
+        div.className = 'mb-4 p-4 border rounded';
+
+        let emotionsHtml = '';
+        for (const [emotion, value] of Object.entries(result.emotions)) {
+            emotionsHtml += `
+                <div class="flex justify-between items-center mb-1">
+                    <span class="capitalize">${emotion}:</span>
+                    <span>${value.toFixed(1)}%</span>
+                </div>
+            `;
+        }
+
+        div.innerHTML = `
+            <h3 class="font-semibold mb-2">Face ${result.face_id}</h3>
+            ${emotionsHtml}
+            <button onclick="openEditModal(${result.face_id})"
+                class="mt-2 bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                Edit Emotions
+            </button>
+        `;
+                container.appendChild(div);
+            });
+
+            const imageContainer = document.getElementById('finalImageContainer');
+    imageContainer.innerHTML = `
+        <img src="/uploads/${data.output_image}" class="w-full">
+    `;
+
+    document.getElementById('resultsSection').classList.remove('hidden');
+}
+
+        async function submitToDatabase() {
+            if (!analysisResults) {
+                alert('No analysis results to submit');
+                return;
+            }
+
+            document.getElementById('loadingModal').classList.remove('hidden');
+
+            try {
+                const response = await fetch('/save_results', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        image_path: currentImagePath,
+                        emotions: analysisResults.results
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('Results saved successfully!');
+                } else {
+                    alert('Error saving results: ' + data.error);
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('An error occurred while saving to database');
+            } finally {
+                document.getElementById('loadingModal').classList.add('hidden');
+            }
+        }
+    </script>
+</body>
+</html>

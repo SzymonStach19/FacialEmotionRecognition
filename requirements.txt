@@ -1,0 +1,7 @@
+Flask==3.0.0
+opencv-python==4.8.1
+numpy==1.24.3
+fer==22.5.1
+Werkzeug==3.0.1
+sqlite3==3.35.0
+python-dateutil==2.8.2
